@@ -24,6 +24,23 @@
 
 set -uo pipefail
 
+# ------------------------------------------------------------------
+# TERMINAL FIX
+# EmulationStation often launches Tools/Ports scripts with stdin/
+# stdout/stderr wired to something that is NOT a real interactive
+# terminal. In that case "dialog" fails instantly and the script
+# exits without showing anything (the classic "screen flashes and
+# goes back to the menu"). The fix is to force I/O onto the physical
+# console device, the same way dArkOS/ArkOS's own dialog-based tools
+# do (e.g. netplay.sh uses /dev/tty0).
+# If the script is run over SSH, this is skipped (the SSH terminal
+# already works fine on its own).
+# ------------------------------------------------------------------
+export TERM="${TERM:-linux}"
+if [ -z "${SSH_TTY:-}" ] && [ -c /dev/tty0 ] && [ -w /dev/tty0 ] && [ -r /dev/tty0 ]; then
+    exec </dev/tty0 >/dev/tty0 2>/dev/tty0
+fi
+
 # ==================== CONFIGURATION ====================
 
 # Folders where the script tries to auto-detect the roms root.
@@ -53,6 +70,8 @@ DELETE_MODE="trash"
 
 SCRIPT_NAME="$(basename "$0")"
 TMP_DIR="$(mktemp -d /tmp/orphan_media.XXXXXX)"
+LOG_FILE="/tmp/orphan_media_cleaner.log"
+: > "$LOG_FILE" 2>/dev/null || LOG_FILE="/dev/null"
 GPTOKEYB_PID=""
 ROMS_DIR=""
 declare -A ORPHAN_COUNT_BY_SYSTEM=()
@@ -61,6 +80,21 @@ ORPHAN_FULL_PATHS=()
 ORPHAN_SYSTEM_OF_PATH=()
 TOTAL_ORPHANS=0
 TOTAL_SIZE=0
+
+# Shows an error, logs it, and PAUSES the screen (without this, the
+# screen just flashes and returns to EmulationStation with no time to
+# read anything).
+fail() {
+    {
+        echo "[$(date '+%H:%M:%S')] ERROR: $*"
+    } | tee -a "$LOG_FILE" >&2
+    echo
+    echo "Log saved to: $LOG_FILE"
+    echo "Press any button/key to go back..."
+    read -n 1 -s -r || sleep 3
+    exit 1
+}
+trap 'fail "unexpected error near line $LINENO (exit code $?)"' ERR
 
 cleanup() {
     [ -n "$GPTOKEYB_PID" ] && kill "$GPTOKEYB_PID" >/dev/null 2>&1
@@ -364,9 +398,7 @@ main_menu() {
 # ==================== START ====================
 
 if ! command -v dialog >/dev/null 2>&1; then
-    echo "Error: 'dialog' command not found."
-    echo "Install it with: opkg install dialog  (or)  apt-get install dialog"
-    exit 1
+    fail "'dialog' command not found. Install it with: opkg install dialog  (or)  apt-get install dialog"
 fi
 
 if ! find_roms_dir; then
@@ -374,9 +406,7 @@ if ! find_roms_dir; then
         "Could not auto-detect the roms folder.\nEnter the full path (e.g. /roms):" 10 60 "/roms" \
         3>&1 1>&2 2>&3)
     if [ -z "$ROMS_DIR" ] || [ ! -d "$ROMS_DIR" ]; then
-        clear
-        echo "Invalid roms folder. Exiting."
-        exit 1
+        fail "invalid or empty roms folder ('$ROMS_DIR')."
     fi
 fi
 
