@@ -24,16 +24,44 @@
 
 set -uo pipefail
 
+{
+    echo "[$(date '+%H:%M:%S' 2>/dev/null)] start: UI_SERVICE='${UI_SERVICE:-}' SSH_TTY='${SSH_TTY:-}' tty0_ok=$([ -c /dev/tty0 ] && echo yes || echo no)"
+} >> /tmp/orphan_media_cleaner_launch.log 2>/dev/null || true
+
 # ------------------------------------------------------------------
-# TERMINAL FIX
-# EmulationStation often launches Tools/Ports scripts with stdin/
-# stdout/stderr wired to something that is NOT a real interactive
-# terminal. In that case "dialog" fails instantly and the script
-# exits without showing anything (the classic "screen flashes and
-# goes back to the menu"). The fix is to force I/O onto the physical
-# console device, the same way dArkOS/ArkOS's own dialog-based tools
-# do (e.g. netplay.sh uses /dev/tty0).
-# If the script is run over SSH, this is skipped (the SSH terminal
+# RELAUNCH INSIDE A REAL TERMINAL (Weston/Sway/classic console)
+# ArkOS/dArkOS builds that use Weston or Sway (Wayland) don't have a
+# text console underneath: a "dialog" app launched directly by
+# EmulationStation has nowhere to draw and dies instantly (the
+# classic "screen flashes and goes back to the menu"). It needs to be
+# opened INSIDE a Wayland terminal. This is the same scheme used by
+# ThemeMaster, the dialog-based tool officially supported by dArkOS:
+#   - Weston -> uses the "run" wrapper
+#   - Sway   -> uses the "foot" terminal
+#   - Neither of those (classic console/framebuffer) -> runs directly
+# ------------------------------------------------------------------
+if [ -z "${OMC_RELAUNCHED:-}" ]; then
+    export OMC_RELAUNCHED=1
+    case "${UI_SERVICE:-}" in
+        weston.service)
+            if command -v run >/dev/null 2>&1; then
+                exec run "bash '$0'"
+            fi
+            ;;
+        sway.service*|essway.service*)
+            if command -v foot >/dev/null 2>&1; then
+                exec foot -F bash "$0"
+            fi
+            ;;
+    esac
+fi
+
+# ------------------------------------------------------------------
+# TERMINAL FIX (fallback for classic/framebuffer consoles)
+# If none of the cases above applied, still make sure stdin/stdout/
+# stderr are on a real interactive terminal (the physical console),
+# the same way other dArkOS dialog tools do (e.g. netplay.sh uses
+# /dev/tty0). If run over SSH, this is skipped (the SSH terminal
 # already works fine on its own).
 # ------------------------------------------------------------------
 export TERM="${TERM:-linux}"
